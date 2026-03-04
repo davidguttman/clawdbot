@@ -39,6 +39,7 @@ export type DiscordGuildEntryResolved = {
       systemPrompt?: string;
       includeThreadStarter?: boolean;
       autoThread?: boolean;
+      autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
     }
   >;
 };
@@ -54,6 +55,7 @@ export type DiscordChannelConfigResolved = {
   systemPrompt?: string;
   includeThreadStarter?: boolean;
   autoThread?: boolean;
+  autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
@@ -400,6 +402,7 @@ function resolveDiscordChannelConfigEntry(
     systemPrompt: entry.systemPrompt,
     includeThreadStarter: entry.includeThreadStarter,
     autoThread: entry.autoThread,
+    autoArchiveDuration: entry.autoArchiveDuration,
   };
   return resolved;
 }
