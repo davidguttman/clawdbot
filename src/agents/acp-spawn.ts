@@ -326,6 +326,17 @@ export async function spawnAcpDirect(
       error: 'sessions_spawn streamTo="parent" requires an active requester session context.',
     };
   }
+
+  // For mode=run without thread binding, implicitly route output to parent session
+  // instead of Discord. This enables agent-to-agent supervision patterns where
+  // the spawning agent wants to receive results directly, not via Discord.
+  const requestThreadBinding = params.thread === true;
+  const implicitStreamToParent =
+    !streamToParentRequested &&
+    params.mode === "run" &&
+    !requestThreadBinding &&
+    Boolean(parentSessionKey);
+  const effectiveStreamToParent = streamToParentRequested || implicitStreamToParent;
   const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
@@ -339,7 +350,6 @@ export async function spawnAcpDirect(
     };
   }
 
-  const requestThreadBinding = params.thread === true;
   const spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
     threadRequested: requestThreadBinding,
@@ -530,17 +540,17 @@ export async function spawnAcpDirect(
   // Fresh one-shot ACP runs should bootstrap the worker first, then let higher layers
   // decide how to relay status. Inline delivery is reserved for thread-bound sessions.
   const useInlineDelivery =
-    hasDeliveryTarget && spawnMode === "session" && !streamToParentRequested;
+    hasDeliveryTarget && spawnMode === "session" && !effectiveStreamToParent;
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   const streamLogPath =
-    streamToParentRequested && parentSessionKey
+    effectiveStreamToParent && parentSessionKey
       ? resolveAcpSpawnStreamLogPath({
           childSessionKey: sessionKey,
         })
       : undefined;
   let parentRelay: AcpSpawnParentRelayHandle | undefined;
-  if (streamToParentRequested && parentSessionKey) {
+  if (effectiveStreamToParent && parentSessionKey) {
     // Register relay before dispatch so fast lifecycle failures are not missed.
     parentRelay = startAcpSpawnParentStreamRelay({
       runId: childIdem,
@@ -585,7 +595,7 @@ export async function spawnAcpDirect(
     };
   }
 
-  if (streamToParentRequested && parentSessionKey) {
+  if (effectiveStreamToParent && parentSessionKey) {
     if (parentRelay && childRunId !== childIdem) {
       parentRelay.dispose();
       // Defensive fallback if gateway returns a runId that differs from idempotency key.
