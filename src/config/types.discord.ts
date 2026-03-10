@@ -52,6 +52,12 @@ export type DiscordGuildChannelConfig = {
   systemPrompt?: string;
   /** If false, omit thread starter context for this channel (default: true). */
   includeThreadStarter?: boolean;
+  /** If true, auto-create a Discord thread for incoming messages in this channel. */
+  autoThread?: boolean;
+  /** Naming strategy for auto-created threads. "message" uses message text; "summarize" renames with an LLM title. */
+  autoThreadName?: "message" | "summarize";
+  /** Archive duration (minutes) for auto-created threads. Valid values: 60, 1440, 4320, 10080. */
+  autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
