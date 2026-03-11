@@ -3,7 +3,7 @@ import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../../agents
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { getApiKeyForModel } from "../../agents/model-auth.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
-import { parseModelRef } from "../../agents/model-selection.js";
+import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveModelWithRegistry } from "../../agents/pi-embedded-runner/model.js";
 import { extractAssistantText } from "../../agents/pi-embedded-utils.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
@@ -89,13 +89,21 @@ export function resolveDiscordThreadTitleModelSelection(params: {
     return null;
   }
   const { model, profile } = splitTrailingAuthProfile(modelRef);
-  const parsed = parseModelRef(model, DEFAULT_PROVIDER);
-  if (!parsed) {
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+  });
+  const resolved = resolveModelRefFromString({
+    raw: model,
+    defaultProvider: DEFAULT_PROVIDER,
+    aliasIndex,
+  });
+  if (!resolved) {
     return null;
   }
   return {
-    provider: parsed.provider,
-    modelId: parsed.model,
+    provider: resolved.ref.provider,
+    modelId: resolved.ref.model,
     profileId: profile || undefined,
     agentDir: resolveAgentDir(params.cfg, params.agentId),
   };
