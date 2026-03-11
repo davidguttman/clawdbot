@@ -3,7 +3,11 @@ import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../../agents
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { getApiKeyForModel } from "../../agents/model-auth.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
-import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
+import {
+  buildModelAliasIndex,
+  resolveDefaultModelForAgent,
+  resolveModelRefFromString,
+} from "../../agents/model-selection.js";
 import { resolveModelWithRegistry } from "../../agents/pi-embedded-runner/model.js";
 import { extractAssistantText } from "../../agents/pi-embedded-utils.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
@@ -84,27 +88,29 @@ export function resolveDiscordThreadTitleModelSelection(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): ThreadTitleModelSelection | null {
+  const fallbackRef = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
   const modelRef = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
-  if (!modelRef) {
-    return null;
-  }
-  const { model, profile } = splitTrailingAuthProfile(modelRef);
+  const split = modelRef ? splitTrailingAuthProfile(modelRef) : null;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
+    defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
   });
-  const resolved = resolveModelRefFromString({
-    raw: model,
-    defaultProvider: DEFAULT_PROVIDER,
-    aliasIndex,
-  });
-  if (!resolved) {
-    return null;
-  }
+  const resolved = split
+    ? resolveModelRefFromString({
+        raw: split.model,
+        defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
+        aliasIndex,
+      })
+    : null;
+  const provider = resolved?.ref.provider ?? fallbackRef.provider;
+  const modelId = resolved?.ref.model ?? fallbackRef.model;
   return {
-    provider: resolved.ref.provider,
-    modelId: resolved.ref.model,
-    profileId: profile || undefined,
+    provider,
+    modelId,
+    profileId: split?.profile || undefined,
     agentDir: resolveAgentDir(params.cfg, params.agentId),
   };
 }
