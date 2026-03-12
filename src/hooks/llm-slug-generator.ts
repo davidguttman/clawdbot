@@ -9,11 +9,10 @@ import {
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
   resolveAgentDir,
-  resolveAgentEffectiveModelPrimary,
 } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from "../agents/defaults.js";
-import { parseModelRef } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
@@ -44,11 +43,15 @@ ${params.sessionContent.slice(0, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
-    // Resolve model from agent config instead of using hardcoded defaults
-    const modelRef = resolveAgentEffectiveModelPrimary(params.cfg, agentId);
-    const parsed = modelRef ? parseModelRef(modelRef, DEFAULT_PROVIDER) : null;
-    const provider = parsed?.provider ?? DEFAULT_PROVIDER;
-    const model = parsed?.model ?? DEFAULT_MODEL;
+    // Resolve model/profile using shared selection logic (aliases + trailing @profile).
+    const selection = resolveSimpleCompletionSelectionForAgent({
+      cfg: params.cfg,
+      agentId,
+    });
+    const provider = selection?.provider ?? DEFAULT_PROVIDER;
+    const model = selection?.modelId ?? DEFAULT_MODEL;
+    const effectiveAgentDir = selection?.agentDir || agentDir;
+    const authProfileId = selection?.profileId?.trim();
 
     const result = await runEmbeddedPiAgent({
       sessionId: `slug-generator-${Date.now()}`,
@@ -56,11 +59,17 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       agentId,
       sessionFile: tempSessionFile,
       workspaceDir,
-      agentDir,
+      agentDir: effectiveAgentDir,
       config: params.cfg,
       prompt,
       provider,
       model,
+      ...(authProfileId
+        ? {
+            authProfileId,
+            authProfileIdSource: "user" as const,
+          }
+        : {}),
       timeoutMs: 15_000, // 15 second timeout
       runId: `slug-gen-${Date.now()}`,
     });
