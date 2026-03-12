@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 
 const hoisted = vi.hoisted(() => ({
   resolveModelMock: vi.fn(),
   getApiKeyForModelMock: vi.fn(),
   setRuntimeApiKeyMock: vi.fn(),
   resolveCopilotApiTokenMock: vi.fn(),
+  runEmbeddedPiAgentMock: vi.fn(),
 }));
 
 vi.mock("./pi-embedded-runner/model.js", () => ({
@@ -19,13 +21,21 @@ vi.mock("../providers/github-copilot-token.js", () => ({
   resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
 }));
 
-import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
+vi.mock("./pi-embedded.js", () => ({
+  runEmbeddedPiAgent: hoisted.runEmbeddedPiAgentMock,
+}));
+
+import {
+  prepareSimpleCompletionModel,
+  runSimpleCompletionForAgent,
+} from "./simple-completion-runtime.js";
 
 beforeEach(() => {
   hoisted.resolveModelMock.mockReset();
   hoisted.getApiKeyForModelMock.mockReset();
   hoisted.setRuntimeApiKeyMock.mockReset();
   hoisted.resolveCopilotApiTokenMock.mockReset();
+  hoisted.runEmbeddedPiAgentMock.mockReset();
 
   hoisted.resolveModelMock.mockReturnValue({
     model: {
@@ -47,6 +57,9 @@ beforeEach(() => {
     expiresAt: Date.now() + 60_000,
     source: "cache:/tmp/copilot-token.json",
     baseUrl: "https://api.individual.githubcopilot.com",
+  });
+  hoisted.runEmbeddedPiAgentMock.mockResolvedValue({
+    payloads: [{ text: "ok" }],
   });
 });
 
@@ -223,5 +236,77 @@ describe("prepareSimpleCompletionModel", () => {
       },
     });
     expect(hoisted.setRuntimeApiKeyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("runSimpleCompletionForAgent", () => {
+  it("forwards selected model and auth profile to embedded run", async () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main", default: true, agentDir: "/tmp/selected-agent" }],
+        defaults: { model: "openrouter/anthropic/claude-sonnet-4-5@work" },
+      },
+    } as OpenClawConfig;
+
+    const result = await runSimpleCompletionForAgent({
+      cfg,
+      agentId: "main",
+      prompt: "Generate a slug",
+      sessionId: "slug-generator-1",
+      sessionKey: "temp:slug-generator",
+      sessionFile: "/tmp/slug/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      timeoutMs: 15_000,
+      runId: "slug-gen-1",
+    });
+
+    expect(result).toEqual({ payloads: [{ text: "ok" }] });
+    expect(hoisted.runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        agentDir: "/tmp/selected-agent",
+        provider: "openrouter",
+        model: "anthropic/claude-sonnet-4-5",
+        authProfileId: "work",
+        authProfileIdSource: "user",
+        sessionId: "slug-generator-1",
+        sessionKey: "temp:slug-generator",
+        sessionFile: "/tmp/slug/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "Generate a slug",
+        timeoutMs: 15_000,
+        runId: "slug-gen-1",
+      }),
+    );
+  });
+
+  it("supports explicit modelRef override", async () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main", default: true, agentDir: "/tmp/selected-agent" }],
+        defaults: { model: "anthropic/claude-opus-4-6" },
+      },
+    } as OpenClawConfig;
+
+    await runSimpleCompletionForAgent({
+      cfg,
+      agentId: "main",
+      modelRef: "anthropic/claude-sonnet-4-5@override",
+      prompt: "Generate a slug",
+      sessionId: "slug-generator-2",
+      sessionFile: "/tmp/slug/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      timeoutMs: 15_000,
+      runId: "slug-gen-2",
+    });
+
+    expect(hoisted.runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        authProfileId: "override",
+        authProfileIdSource: "user",
+      }),
+    );
   });
 });

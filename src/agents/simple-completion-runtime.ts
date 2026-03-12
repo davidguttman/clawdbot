@@ -1,7 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
-import { DEFAULT_PROVIDER } from "./defaults.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { getApiKeyForModel, type ResolvedProviderAuth } from "./model-auth.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
@@ -10,6 +10,7 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import { resolveModel } from "./pi-embedded-runner/model.js";
+import { runEmbeddedPiAgent } from "./pi-embedded.js";
 
 type SimpleCompletionAuthStorage = {
   setRuntimeApiKey: (provider: string, apiKey: string) => void;
@@ -45,6 +46,19 @@ export type PreparedSimpleCompletionModelForAgent =
       selection?: AgentSimpleCompletionSelection;
       auth?: ResolvedProviderAuth;
     };
+
+type RunSimpleCompletionForAgentParams = {
+  cfg: OpenClawConfig;
+  agentId: string;
+  prompt: string;
+  sessionId: string;
+  sessionKey?: string;
+  sessionFile: string;
+  workspaceDir: string;
+  timeoutMs: number;
+  runId: string;
+  modelRef?: string;
+};
 
 export function resolveSimpleCompletionSelectionForAgent(params: {
   cfg: OpenClawConfig;
@@ -227,4 +241,36 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     model: prepared.model,
     auth: prepared.auth,
   };
+}
+
+export async function runSimpleCompletionForAgent(params: RunSimpleCompletionForAgentParams) {
+  const selection = resolveSimpleCompletionSelectionForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    modelRef: params.modelRef,
+  });
+  const provider = selection?.provider ?? DEFAULT_PROVIDER;
+  const model = selection?.modelId ?? DEFAULT_MODEL;
+  const authProfileId = selection?.profileId?.trim();
+
+  return runEmbeddedPiAgent({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    sessionFile: params.sessionFile,
+    workspaceDir: params.workspaceDir,
+    agentDir: selection?.agentDir || resolveAgentDir(params.cfg, params.agentId),
+    config: params.cfg,
+    prompt: params.prompt,
+    provider,
+    model,
+    ...(authProfileId
+      ? {
+          authProfileId,
+          authProfileIdSource: "user" as const,
+        }
+      : {}),
+    timeoutMs: params.timeoutMs,
+    runId: params.runId,
+  });
 }

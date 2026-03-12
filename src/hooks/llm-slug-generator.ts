@@ -5,14 +5,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  resolveDefaultAgentId,
-  resolveAgentWorkspaceDir,
-  resolveAgentDir,
-} from "../agents/agent-scope.js";
-import { DEFAULT_PROVIDER, DEFAULT_MODEL } from "../agents/defaults.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
+import { resolveDefaultAgentId, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { runSimpleCompletionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
@@ -30,7 +24,6 @@ export async function generateSlugViaLLM(params: {
   try {
     const agentId = resolveDefaultAgentId(params.cfg);
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-    const agentDir = resolveAgentDir(params.cfg, agentId);
 
     // Create a temporary session file for this one-off LLM call
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-slug-"));
@@ -43,33 +36,14 @@ ${params.sessionContent.slice(0, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
-    // Resolve model/profile using shared selection logic (aliases + trailing @profile).
-    const selection = resolveSimpleCompletionSelectionForAgent({
+    const result = await runSimpleCompletionForAgent({
       cfg: params.cfg,
       agentId,
-    });
-    const provider = selection?.provider ?? DEFAULT_PROVIDER;
-    const model = selection?.modelId ?? DEFAULT_MODEL;
-    const effectiveAgentDir = selection?.agentDir || agentDir;
-    const authProfileId = selection?.profileId?.trim();
-
-    const result = await runEmbeddedPiAgent({
+      prompt,
       sessionId: `slug-generator-${Date.now()}`,
       sessionKey: "temp:slug-generator",
-      agentId,
       sessionFile: tempSessionFile,
       workspaceDir,
-      agentDir: effectiveAgentDir,
-      config: params.cfg,
-      prompt,
-      provider,
-      model,
-      ...(authProfileId
-        ? {
-            authProfileId,
-            authProfileIdSource: "user" as const,
-          }
-        : {}),
       timeoutMs: 15_000, // 15 second timeout
       runId: `slug-gen-${Date.now()}`,
     });
