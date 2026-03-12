@@ -101,11 +101,10 @@ describe("prepareSimpleCompletionModel", () => {
     expect(hoisted.getApiKeyForModelMock).not.toHaveBeenCalled();
   });
 
-  it("returns error when api key is missing and mode is not allowlisted", async () => {
-    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
-      source: "models.providers.anthropic",
-      mode: "api-key",
-    });
+  it("returns error when auth lookup throws", async () => {
+    hoisted.getApiKeyForModelMock.mockRejectedValueOnce(
+      new Error('No API key found for provider "anthropic".'),
+    );
 
     const result = await prepareSimpleCompletionModel({
       cfg: undefined,
@@ -114,11 +113,7 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     expect(result).toEqual({
-      error: 'No API key resolved for provider "anthropic" (auth mode: api-key).',
-      auth: {
-        source: "models.providers.anthropic",
-        mode: "api-key",
-      },
+      error: 'No API key found for provider "anthropic".',
     });
     expect(hoisted.setRuntimeApiKeyMock).not.toHaveBeenCalled();
   });
@@ -191,5 +186,42 @@ describe("prepareSimpleCompletionModel", () => {
       "github-copilot",
       "copilot-runtime-token",
     );
+  });
+
+  it("returns structured error when github-copilot token exchange fails", async () => {
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: {
+        provider: "github-copilot",
+        id: "gpt-4.1",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "ghu_test",
+      source: "profile:github-copilot:default",
+      mode: "token",
+    });
+    hoisted.resolveCopilotApiTokenMock.mockRejectedValueOnce(
+      new Error("GitHub Copilot token exchange failed"),
+    );
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "github-copilot",
+      modelId: "gpt-4.1",
+    });
+
+    expect(result).toEqual({
+      error: "GitHub Copilot token exchange failed",
+      auth: {
+        apiKey: "ghu_test",
+        source: "profile:github-copilot:default",
+        mode: "token",
+      },
+    });
+    expect(hoisted.setRuntimeApiKeyMock).not.toHaveBeenCalled();
   });
 });

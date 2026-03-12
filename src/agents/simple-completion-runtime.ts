@@ -105,6 +105,19 @@ function hasMissingApiKeyAllowance(params: {
   return Boolean(params.allowMissingApiKeyModes?.includes(params.mode));
 }
 
+function formatRuntimeError(err: unknown, fallback: string): string {
+  if (err instanceof Error && typeof err.message === "string" && err.message.trim()) {
+    return err.message.trim();
+  }
+  if (typeof err === "string" && err.trim()) {
+    return err.trim();
+  }
+  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
+    return `${err}`;
+  }
+  return fallback;
+}
+
 export async function prepareSimpleCompletionModel(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -121,13 +134,24 @@ export async function prepareSimpleCompletionModel(params: {
     };
   }
 
-  const auth = await getApiKeyForModel({
-    model: resolved.model,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    profileId: params.profileId,
-    preferredProfile: params.preferredProfile,
-  });
+  let auth: ResolvedProviderAuth;
+  try {
+    auth = await getApiKeyForModel({
+      model: resolved.model,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      profileId: params.profileId,
+      preferredProfile: params.preferredProfile,
+    });
+  } catch (err) {
+    return {
+      error: formatRuntimeError(
+        err,
+        `Failed to resolve auth for provider "${resolved.model.provider}".`,
+      ),
+    };
+  }
+
   const rawApiKey = auth.apiKey?.trim();
   if (
     !rawApiKey &&
@@ -143,11 +167,21 @@ export async function prepareSimpleCompletionModel(params: {
   }
 
   if (rawApiKey) {
-    await setRuntimeApiKeyForCompletion({
-      authStorage: resolved.authStorage,
-      model: resolved.model,
-      apiKey: rawApiKey,
-    });
+    try {
+      await setRuntimeApiKeyForCompletion({
+        authStorage: resolved.authStorage,
+        model: resolved.model,
+        apiKey: rawApiKey,
+      });
+    } catch (err) {
+      return {
+        error: formatRuntimeError(
+          err,
+          `Failed to set runtime API key for provider "${resolved.model.provider}".`,
+        ),
+        auth,
+      };
+    }
   }
 
   return {
