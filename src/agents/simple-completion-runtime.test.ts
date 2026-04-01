@@ -1,0 +1,312 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+
+const hoisted = vi.hoisted(() => ({
+  resolveModelMock: vi.fn(),
+  getApiKeyForModelMock: vi.fn(),
+  setRuntimeApiKeyMock: vi.fn(),
+  resolveCopilotApiTokenMock: vi.fn(),
+  runEmbeddedPiAgentMock: vi.fn(),
+}));
+
+vi.mock("./pi-embedded-runner/model.js", () => ({
+  resolveModel: hoisted.resolveModelMock,
+}));
+
+vi.mock("./model-auth.js", () => ({
+  getApiKeyForModel: hoisted.getApiKeyForModelMock,
+}));
+
+vi.mock("../providers/github-copilot-token.js", () => ({
+  resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
+}));
+
+vi.mock("./pi-embedded.js", () => ({
+  runEmbeddedPiAgent: hoisted.runEmbeddedPiAgentMock,
+}));
+
+import {
+  prepareSimpleCompletionModel,
+  runSimpleCompletionForAgent,
+} from "./simple-completion-runtime.js";
+
+beforeEach(() => {
+  hoisted.resolveModelMock.mockReset();
+  hoisted.getApiKeyForModelMock.mockReset();
+  hoisted.setRuntimeApiKeyMock.mockReset();
+  hoisted.resolveCopilotApiTokenMock.mockReset();
+  hoisted.runEmbeddedPiAgentMock.mockReset();
+
+  hoisted.resolveModelMock.mockReturnValue({
+    model: {
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+    },
+    authStorage: {
+      setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+    },
+    modelRegistry: {},
+  });
+  hoisted.getApiKeyForModelMock.mockResolvedValue({
+    apiKey: "sk-test",
+    source: "env:TEST_API_KEY",
+    mode: "api-key",
+  });
+  hoisted.resolveCopilotApiTokenMock.mockResolvedValue({
+    token: "copilot-runtime-token",
+    expiresAt: Date.now() + 60_000,
+    source: "cache:/tmp/copilot-token.json",
+    baseUrl: "https://api.individual.githubcopilot.com",
+  });
+  hoisted.runEmbeddedPiAgentMock.mockResolvedValue({
+    payloads: [{ text: "ok" }],
+  });
+});
+
+describe("prepareSimpleCompletionModel", () => {
+  it("resolves model auth and sets runtime api key", async () => {
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: " sk-test ",
+      source: "env:TEST_API_KEY",
+      mode: "api-key",
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          provider: "anthropic",
+          id: "claude-opus-4-6",
+        }),
+        auth: expect.objectContaining({
+          mode: "api-key",
+          source: "env:TEST_API_KEY",
+        }),
+      }),
+    );
+    expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith("anthropic", "sk-test");
+  });
+
+  it("returns error when model resolution fails", async () => {
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      error: "Unknown model: anthropic/missing-model",
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "anthropic",
+      modelId: "missing-model",
+    });
+
+    expect(result).toEqual({
+      error: "Unknown model: anthropic/missing-model",
+    });
+    expect(hoisted.getApiKeyForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("returns error when auth lookup throws", async () => {
+    hoisted.getApiKeyForModelMock.mockRejectedValueOnce(
+      new Error('No API key found for provider "anthropic".'),
+    );
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+    });
+
+    expect(result).toEqual({
+      error: 'No API key found for provider "anthropic".',
+    });
+    expect(hoisted.setRuntimeApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("continues without api key when auth mode is allowlisted", async () => {
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: {
+        provider: "amazon-bedrock",
+        id: "anthropic.claude-sonnet-4-5",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      source: "aws-sdk default chain",
+      mode: "aws-sdk",
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "amazon-bedrock",
+      modelId: "anthropic.claude-sonnet-4-5",
+      allowMissingApiKeyModes: ["aws-sdk"],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          provider: "amazon-bedrock",
+          id: "anthropic.claude-sonnet-4-5",
+        }),
+        auth: {
+          source: "aws-sdk default chain",
+          mode: "aws-sdk",
+        },
+      }),
+    );
+    expect(hoisted.setRuntimeApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("exchanges github token when provider is github-copilot", async () => {
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: {
+        provider: "github-copilot",
+        id: "gpt-4.1",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "ghu_test",
+      source: "profile:github-copilot:default",
+      mode: "token",
+    });
+
+    await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "github-copilot",
+      modelId: "gpt-4.1",
+    });
+
+    expect(hoisted.resolveCopilotApiTokenMock).toHaveBeenCalledWith({
+      githubToken: "ghu_test",
+    });
+    expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith(
+      "github-copilot",
+      "copilot-runtime-token",
+    );
+  });
+
+  it("returns structured error when github-copilot token exchange fails", async () => {
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: {
+        provider: "github-copilot",
+        id: "gpt-4.1",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "ghu_test",
+      source: "profile:github-copilot:default",
+      mode: "token",
+    });
+    hoisted.resolveCopilotApiTokenMock.mockRejectedValueOnce(
+      new Error("GitHub Copilot token exchange failed"),
+    );
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "github-copilot",
+      modelId: "gpt-4.1",
+    });
+
+    expect(result).toEqual({
+      error: "GitHub Copilot token exchange failed",
+      auth: {
+        apiKey: "ghu_test",
+        source: "profile:github-copilot:default",
+        mode: "token",
+      },
+    });
+    expect(hoisted.setRuntimeApiKeyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("runSimpleCompletionForAgent", () => {
+  it("forwards selected model and auth profile to embedded run", async () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main", default: true, agentDir: "/tmp/selected-agent" }],
+        defaults: { model: "openrouter/anthropic/claude-sonnet-4-5@work" },
+      },
+    } as OpenClawConfig;
+
+    const result = await runSimpleCompletionForAgent({
+      cfg,
+      agentId: "main",
+      prompt: "Generate a slug",
+      sessionId: "slug-generator-1",
+      sessionKey: "temp:slug-generator",
+      sessionFile: "/tmp/slug/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      timeoutMs: 15_000,
+      runId: "slug-gen-1",
+    });
+
+    expect(result).toEqual({ payloads: [{ text: "ok" }] });
+    expect(hoisted.runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        agentDir: "/tmp/selected-agent",
+        provider: "openrouter",
+        model: "anthropic/claude-sonnet-4-5",
+        authProfileId: "work",
+        authProfileIdSource: "user",
+        sessionId: "slug-generator-1",
+        sessionKey: "temp:slug-generator",
+        sessionFile: "/tmp/slug/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "Generate a slug",
+        timeoutMs: 15_000,
+        runId: "slug-gen-1",
+      }),
+    );
+  });
+
+  it("supports explicit modelRef override", async () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main", default: true, agentDir: "/tmp/selected-agent" }],
+        defaults: { model: "anthropic/claude-opus-4-6" },
+      },
+    } as OpenClawConfig;
+
+    await runSimpleCompletionForAgent({
+      cfg,
+      agentId: "main",
+      modelRef: "anthropic/claude-sonnet-4-5@override",
+      prompt: "Generate a slug",
+      sessionId: "slug-generator-2",
+      sessionFile: "/tmp/slug/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      timeoutMs: 15_000,
+      runId: "slug-gen-2",
+    });
+
+    expect(hoisted.runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        authProfileId: "override",
+        authProfileIdSource: "user",
+      }),
+    );
+  });
+});
